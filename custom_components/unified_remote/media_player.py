@@ -3,6 +3,7 @@ from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayer
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import STATE_ON, STATE_IDLE
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 
@@ -21,15 +22,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     computers = hass.data[DOMAIN].get("computers", [])
     async_add_entities([UnifiedRemoteMediaPlayer(comp) for comp in computers])
 
+
 class UnifiedRemoteMediaPlayer(MediaPlayerEntity):
     """Media Player for Unified Remote."""
 
     def __init__(self, computer):
         self._computer = computer
-        self._attr_name = f"{computer.name} Media"
+        self._attr_name = f"{computer.name} Media Controls"
         self._attr_unique_id = f"{computer.host}_media_player"
         self._attr_supported_features = SUPPORTED_FEATURES
         self._attr_icon = "mdi:speaker-multiple"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._computer.host)},
+            name=self._computer.name,
+            manufacturer="Unified Remote",
+            model="Computer Media",
+        )
 
     @property
     def state(self):
