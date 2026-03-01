@@ -1,10 +1,11 @@
 {
   "domain": "unified_remote",
   "name": "Unified Remote Control",
-  "documentation": "https://github.com/DaviPtrs/hass-unified-remote",
+  "documentation": "https://github.com/akshansh1998/hass-unified-remote",
   "dependencies": [],
-  "codeowners": ["@DaviPtrs"],
+  "codeowners": ["@DaviPtrs", "@akshansh1998"],
   "requirements": [],
   "version": "2.0.0",
-  "iot_class": "local_push"
+  "iot_class": "local_push",
+  "config_flow": true
 }
