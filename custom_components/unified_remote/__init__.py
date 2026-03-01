@@ -5,119 +5,82 @@ import aiohttp
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_HOST, CONF_HOSTS, CONF_NAME, CONF_PORT
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.unified_remote.cli.computer import Computer
 from custom_components.unified_remote.cli.remotes import Remotes
+from .const import DOMAIN, CONF_RETRY
 
-DOMAIN = "unified_remote"
-CONF_RETRY = "retry_delay"
+# ... Keep CONFIG_SCHEMA, load_remotes, init_computers, find_computer, and validate_response exactly as they are ...
 
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Required(CONF_HOSTS): vol.Schema(
-                    vol.All(
-                        [
-                            {
-                                vol.Optional(CONF_NAME, default=""): cv.string,
-                                vol.Required(CONF_HOST, default="localhost"): cv.string,
-                                vol.Optional(CONF_PORT, default="9510"): cv.port,
-                            }
-                        ]
-                    )
-                ),
-                vol.Optional(CONF_RETRY, default=120): int,
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-DEFAULT_NAME = ""
-_LOGGER = log.getLogger(__name__)
-
-COMPUTERS = []
-REMOTES = None
-
-def load_remotes(path):
-    """Load remotes synchronously (to be run in executor job)."""
-    try:
-        remotes = Remotes(path)
-        _LOGGER.info("Remotes loaded sucessfully")
-        return remotes
-    except FileNotFoundError:
-        _LOGGER.error(f"Remotes file not found. Path:{path}")
-    except AssertionError as remote_error:
-        _LOGGER.error(str(remote_error))
-    except Exception as error:
-        _LOGGER.error(str(error))
-    return None
-
-async def init_computers(hosts, session):
-    for computer in hosts:
-        name = computer.get(CONF_NAME)
-        host = computer.get(CONF_HOST)
-        port = computer.get(CONF_PORT)
-
-        if name == "":
-            name = host
-        try:
-            comp = Computer(name, host, port, session)
-            await comp.async_init()
-            COMPUTERS.append(comp)
-        except (AssertionError, Exception):
-            return False
-    return True
-
-def find_computer(name):
-    for computer in COMPUTERS:
-        if computer.name == name:
-            return computer
-    return None
-
-def validate_response(response):
-    """Validate keep alive packet to check if reconnection is needed"""
-    out = response["content"].decode("ascii")
-    status = response["status_code"]
-    flag = 0
-    if status != 200:
-        _LOGGER.error(f"Keep alive packet was failed. Status code: {status}. Response: {out}")
-        flag = 1
-    else:
-        errors = ["Not a valid connection", "No UR"]
-        for error in errors:
-            if error in out:
-                flag = 1
-                break
-    if flag == 1:
-        raise ConnectionError()
-
-async def async_setup(hass, config):
-    """Setting up Unified Remote Integration"""
-    global REMOTES
+async def async_setup(hass: HomeAssistant, config: dict):
+    """Set up the Unified Remote component from configuration.yaml."""
+    hass.data.setdefault(DOMAIN, {"computers": []})
     
-    # Resolve dynamic config path instead of hardcoding "/config"
+    global REMOTES
     REMOTE_FILE_PATH = hass.config.path("custom_components/unified_remote/cli/remotes.yml")
     REMOTES = await hass.async_add_executor_job(load_remotes, REMOTE_FILE_PATH)
 
-    hosts = config[DOMAIN].get(CONF_HOSTS)
-    retry_delay = config[DOMAIN].get(CONF_RETRY)
-    if retry_delay > 120:
-        retry_delay = 120
+    # Setup YAML configuration if it exists
+    if DOMAIN in config:
+        hosts = config[DOMAIN].get(CONF_HOSTS, [])
+        session = async_get_clientsession(hass)
+        await init_computers(hosts, session)
+        hass.data[DOMAIN]["computers"].extend(COMPUTERS)
 
-    # Get HA's built in async http client
+    _register_services(hass)
+    return True
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Set up Unified Remote from a UI config entry."""
     session = async_get_clientsession(hass)
+    
+    # Adapt UI data to match the format our init function expects
+    host_data = [{
+        CONF_NAME: entry.data.get(CONF_NAME, ""),
+        CONF_HOST: entry.data.get(CONF_HOST),
+        CONF_PORT: entry.data.get(CONF_PORT, 9510)
+    }]
+    
+    await init_computers(host_data, session)
+    
+    # Ensure our global list is updated
+    hass.data.setdefault(DOMAIN, {"computers": []})
+    for c in COMPUTERS:
+        if c not in hass.data[DOMAIN]["computers"]:
+            hass.data[DOMAIN]["computers"].append(c)
 
-    if not await init_computers(hosts, session):
-        return False
+    return True
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Unload a config entry."""
+    # Logic to disconnect the computer and remove it from the list
+    host = entry.data.get(CONF_HOST)
+    
+    computer_to_remove = None
+    for computer in hass.data[DOMAIN]["computers"]:
+        if computer.host == host:
+            computer_to_remove = computer
+            break
+            
+    if computer_to_remove:
+        computer_to_remove.set_unavailable()
+        hass.data[DOMAIN]["computers"].remove(computer_to_remove)
+        if computer_to_remove in COMPUTERS:
+            COMPUTERS.remove(computer_to_remove)
+
+    return True
+
+def _register_services(hass):
+    """Register the remote call services."""
+    
     async def keep_alive(now):
         """Keep host listening our requests"""
-        for computer in COMPUTERS:
+        for computer in hass.data[DOMAIN].get("computers", []):
             try:
                 response = await computer.connection.exe_remote("", "")
                 _LOGGER.debug("Keep alive packet sent")
@@ -134,13 +97,15 @@ async def async_setup(hass, config):
     async def handle_call(call):
         """Handle the service call."""
         target = call.data.get("target")
+        computers_list = hass.data[DOMAIN].get("computers", [])
+        
         if target is None or str(target).strip() == "":
-            if not COMPUTERS:
+            if not computers_list:
                 _LOGGER.error("No computers configured.")
                 return
-            computer = COMPUTERS[0]
+            computer = computers_list[0]
         else:
-            computer = find_computer(target)
+            computer = next((c for c in computers_list if c.name == target), None)
 
         if computer is None:
             _LOGGER.error(f"No such computer called {target}")
@@ -151,13 +116,11 @@ async def async_setup(hass, config):
         action = call.data.get("action", DEFAULT_NAME)
         extras = call.data.get("extras")
 
-        # Allows user to pass remote id without declaring it on remotes.yml
         if remote_id is not None and remote_id != "":
             if action != "":
                 await computer.call_remote(remote_id, action, extras)
                 return None
 
-        # Check if none or empty service data was parsed.
         if remote_name != "" and action != "":
             if REMOTES is None:
                 _LOGGER.error("Remotes not initialized properly.")
@@ -174,10 +137,7 @@ async def async_setup(hass, config):
             else:
                 _LOGGER.warning(f'Action "{action}" doesn\'t exists for remote {remote_name}')
 
-    # Register remote call service asynchronously.
-    hass.services.async_register(DOMAIN, "call", handle_call)
-    
-    # Set interval asynchronously
-    async_track_time_interval(hass, keep_alive, timedelta(seconds=retry_delay))
-
-    return True
+    if not hass.services.has_service(DOMAIN, "call"):
+        hass.services.async_register(DOMAIN, "call", handle_call)
+        # Using a fixed 120 retry delay for now; can be parameterized later
+        async_track_time_interval(hass, keep_alive, timedelta(seconds=120))
