@@ -1,52 +1,52 @@
 import logging as log
-
-import requests
+import aiohttp
 
 from custom_components.unified_remote.cli.connection import Connection
 
 _LOGGER = log.getLogger(__name__)
 
-
 class Computer:
-    def connect(self):
-        """Handle with connect function and logs if was successful"""
-        self.connection.connect(self.host, self.port)
-        self.is_available = True
-        _LOGGER.info(f"Connection to {self.name} established")
-
-    def __init__(self, name: str, host: str, port: int):
+    def __init__(self, name: str, host: str, port: int, session: aiohttp.ClientSession):
         self.name = name
         self.host = host
         self.port = port
         self.is_available = False
-        self.connection = Connection()
+        self.session = session
+        self.connection = Connection(session)
+
+    async def async_init(self):
+        """Async initializer to handle the connection."""
         try:
-            self.connect()
+            await self.connect()
         except AssertionError as url_error:
             _LOGGER.error(str(url_error))
             raise
-        except requests.ConnectionError:
+        except aiohttp.ClientError:
             _LOGGER.warning(
-                f"At the first moment {name} seems down, but the connection will be retried."
+                f"At the first moment {self.name} seems down, but the connection will be retried."
             )
         except Exception as e:
             _LOGGER.error(str(e))
             raise
 
-    def reconnect(self):
-        self.connection = None
-        self.connection = Connection()
-        self.connect()
+    async def connect(self):
+        """Handle with connect function and logs if was successful"""
+        await self.connection.connect(self.host, self.port)
+        self.is_available = True
+        _LOGGER.info(f"Connection to {self.name} established")
 
-    def call_remote(self, id, action, extras=None):
+    async def reconnect(self):
+        self.connection = Connection(self.session)
+        await self.connect()
+
+    async def call_remote(self, id, action, extras=None):
         if not self.is_available:
             _LOGGER.error(f"Unable to call remote. {self.name} is unavailable.")
             return None
         try:
-            self.connection.exe_remote(id, action, extras)
+            await self.connection.exe_remote(id, action, extras)
             _LOGGER.debug(f'Call -> Remote ID: "{id}"; Action: "{action}"; Extras: "{extras}"')
-        # Log if request fails.
-        except requests.ConnectionError:
+        except aiohttp.ClientError:
             _LOGGER.error(f"Unable to call remote. {self.name} is unavailable.")
 
     def set_unavailable(self):
