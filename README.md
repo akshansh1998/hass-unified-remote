@@ -3,9 +3,9 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![license](https://img.shields.io/github/license/akshansh1998/hass-unified-remote)](LICENSE)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=akshansh1998&repository=hass-unified-remote&category=integration)
-
 A modernized Home Assistant integration that allows you to control your computer using [Unified Remote](https://www.unifiedremote.com/). 
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=akshansh1998&repository=hass-unified-remote&category=integration)
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/95b63be1-bb9e-4824-9378-7cb3fcf8818c" alt="Unified Remote HA Demo" />
