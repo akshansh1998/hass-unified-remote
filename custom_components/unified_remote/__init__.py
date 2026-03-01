@@ -18,7 +18,7 @@ from .const import DOMAIN, CONF_RETRY
 DEFAULT_NAME = ""
 _LOGGER = log.getLogger(__name__)
 
-PLATFORMS = ["binary_sensor", "media_player", "switch"]
+PLATFORMS = ["binary_sensor", "media_player", "switch", "button"]
 
 CONFIG_SCHEMA = vol.Schema(
     {
