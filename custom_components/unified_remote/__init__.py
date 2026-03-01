@@ -15,7 +15,86 @@ from custom_components.unified_remote.cli.computer import Computer
 from custom_components.unified_remote.cli.remotes import Remotes
 from .const import DOMAIN, CONF_RETRY
 
-# ... Keep CONFIG_SCHEMA, load_remotes, init_computers, find_computer, and validate_response exactly as they are ...
+DEFAULT_NAME = ""
+_LOGGER = log.getLogger(__name__)
+
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                vol.Required(CONF_HOSTS): vol.Schema(
+                    vol.All(
+                        [
+                            {
+                                vol.Optional(CONF_NAME, default=""): cv.string,
+                                vol.Required(CONF_HOST, default="localhost"): cv.string,
+                                vol.Optional(CONF_PORT, default="9510"): cv.port,
+                            }
+                        ]
+                    )
+                ),
+                vol.Optional(CONF_RETRY, default=120): int,
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+COMPUTERS = []
+REMOTES = None
+
+def load_remotes(path):
+    """Load remotes synchronously (to be run in executor job)."""
+    try:
+        remotes = Remotes(path)
+        _LOGGER.info("Remotes loaded sucessfully")
+        return remotes
+    except FileNotFoundError:
+        _LOGGER.error(f"Remotes file not found. Path:{path}")
+    except AssertionError as remote_error:
+        _LOGGER.error(str(remote_error))
+    except Exception as error:
+        _LOGGER.error(str(error))
+    return None
+
+async def init_computers(hosts, session):
+    for computer in hosts:
+        name = computer.get(CONF_NAME)
+        host = computer.get(CONF_HOST)
+        port = computer.get(CONF_PORT)
+
+        if name == "":
+            name = host
+        try:
+            comp = Computer(name, host, port, session)
+            await comp.async_init()
+            COMPUTERS.append(comp)
+        except (AssertionError, Exception):
+            return False
+    return True
+
+def find_computer(name):
+    for computer in COMPUTERS:
+        if computer.name == name:
+            return computer
+    return None
+
+def validate_response(response):
+    """Validate keep alive packet to check if reconnection is needed"""
+    out = response["content"].decode("ascii")
+    status = response["status_code"]
+    flag = 0
+    if status != 200:
+        _LOGGER.error(f"Keep alive packet was failed. Status code: {status}. Response: {out}")
+        flag = 1
+    else:
+        errors = ["Not a valid connection", "No UR"]
+        for error in errors:
+            if error in out:
+                flag = 1
+                break
+    if flag == 1:
+        raise ConnectionError()
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Unified Remote component from configuration.yaml."""
