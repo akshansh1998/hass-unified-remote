@@ -1,12 +1,13 @@
 """HA Unified Remote Integration"""
 import logging as log
 from datetime import timedelta
+import aiohttp
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import CONF_HOST, CONF_HOSTS, CONF_NAME, CONF_PORT
-from homeassistant.helpers.event import track_time_interval
-from requests import ConnectionError
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.unified_remote.cli.computer import Computer
 from custom_components.unified_remote.cli.remotes import Remotes
@@ -37,26 +38,26 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 DEFAULT_NAME = ""
-
 _LOGGER = log.getLogger(__name__)
 
-REMOTE_FILE_PATH = "/config/custom_components/unified_remote/cli/remotes.yml"
-
-try:
-    REMOTES = Remotes(REMOTE_FILE_PATH)
-    _LOGGER.info("Remotes loaded sucessful")
-except FileNotFoundError:
-    _LOGGER.error(f"Remotes file not found. Path:{REMOTE_FILE_PATH}")
-# Handle with Remote parsing error.
-except AssertionError as remote_error:
-    _LOGGER.error(str(remote_error))
-except Exception as error:
-    _LOGGER.error(str(error))
-
 COMPUTERS = []
+REMOTES = None
 
+def load_remotes(path):
+    """Load remotes synchronously (to be run in executor job)."""
+    try:
+        remotes = Remotes(path)
+        _LOGGER.info("Remotes loaded sucessfully")
+        return remotes
+    except FileNotFoundError:
+        _LOGGER.error(f"Remotes file not found. Path:{path}")
+    except AssertionError as remote_error:
+        _LOGGER.error(str(remote_error))
+    except Exception as error:
+        _LOGGER.error(str(error))
+    return None
 
-def init_computers(hosts):
+async def init_computers(hosts, session):
     for computer in hosts:
         name = computer.get(CONF_NAME)
         host = computer.get(CONF_HOST)
@@ -65,11 +66,12 @@ def init_computers(hosts):
         if name == "":
             name = host
         try:
-            COMPUTERS.append(Computer(name, host, port))
+            comp = Computer(name, host, port, session)
+            await comp.async_init()
+            COMPUTERS.append(comp)
         except (AssertionError, Exception):
             return False
     return True
-
 
 def find_computer(name):
     for computer in COMPUTERS:
@@ -77,16 +79,13 @@ def find_computer(name):
             return computer
     return None
 
-
 def validate_response(response):
     """Validate keep alive packet to check if reconnection is needed"""
-    out = response.content.decode("ascii")
-    status = response.status_code
+    out = response["content"].decode("ascii")
+    status = response["status_code"]
     flag = 0
     if status != 200:
-        _LOGGER.error(
-            f"Keep alive packet was failed. Status code: {status}. Response: {out}"
-        )
+        _LOGGER.error(f"Keep alive packet was failed. Status code: {status}. Response: {out}")
         flag = 1
     else:
         errors = ["Not a valid connection", "No UR"]
@@ -97,46 +96,48 @@ def validate_response(response):
     if flag == 1:
         raise ConnectionError()
 
-
-def setup(hass, config):
+async def async_setup(hass, config):
     """Setting up Unified Remote Integration"""
-    # Fetching configuration entries.
+    global REMOTES
+    
+    # Resolve dynamic config path instead of hardcoding "/config"
+    REMOTE_FILE_PATH = hass.config.path("custom_components/unified_remote/cli/remotes.yml")
+    REMOTES = await hass.async_add_executor_job(load_remotes, REMOTE_FILE_PATH)
+
     hosts = config[DOMAIN].get(CONF_HOSTS)
     retry_delay = config[DOMAIN].get(CONF_RETRY)
     if retry_delay > 120:
         retry_delay = 120
 
-    if not init_computers(hosts):
+    # Get HA's built in async http client
+    session = async_get_clientsession(hass)
+
+    if not await init_computers(hosts, session):
         return False
 
-    def keep_alive(call):
+    async def keep_alive(now):
         """Keep host listening our requests"""
         for computer in COMPUTERS:
             try:
-                response = computer.connection.exe_remote("", "")
+                response = await computer.connection.exe_remote("", "")
                 _LOGGER.debug("Keep alive packet sent")
-                _LOGGER.debug(
-                    f"Keep alive packet response: {response.content.decode('ascii')}"
-                )
                 validate_response(response)
-            # If there's an connection error, try to reconnect.
-            except ConnectionError:
+            except (ConnectionError, aiohttp.ClientError):
                 try:
                     _LOGGER.debug(f"Trying to reconnect with {computer.host}")
-                    computer.reconnect()
+                    await computer.reconnect()
                 except Exception as error:
                     computer.set_unavailable()
-                    _LOGGER.debug(
-                        f"Unable to connect with {computer.host}. Headers: {computer.connection.get_headers()}"
-                    )
-                    _LOGGER.debug(f"Error: {error}")
+                    _LOGGER.debug(f"Unable to connect with {computer.host}")
                     pass
 
-    def handle_call(call):
+    async def handle_call(call):
         """Handle the service call."""
-        # Fetch service data.
-        target = remote_name = call.data.get("target")
-        if target is None or target.strip() == "":
+        target = call.data.get("target")
+        if target is None or str(target).strip() == "":
+            if not COMPUTERS:
+                _LOGGER.error("No computers configured.")
+                return
             computer = COMPUTERS[0]
         else:
             computer = find_computer(target)
@@ -151,37 +152,32 @@ def setup(hass, config):
         extras = call.data.get("extras")
 
         # Allows user to pass remote id without declaring it on remotes.yml
-        if remote_id is not None:
-            if not (remote_id == "" or action == ""):
-                computer.call_remote(remote_id, action, extras)
+        if remote_id is not None and remote_id != "":
+            if action != "":
+                await computer.call_remote(remote_id, action, extras)
                 return None
 
         # Check if none or empty service data was parsed.
-        if not (remote_name == "" or action == ""):
+        if remote_name != "" and action != "":
+            if REMOTES is None:
+                _LOGGER.error("Remotes not initialized properly.")
+                return
+                
             remote = REMOTES.get_remote(remote_name)
-            # Check if remote was declared on remotes.yml.
             if remote is None:
-                _LOGGER.warning(
-                    f"Remote {remote_name} not found Please check your remotes.yml"
-                )
+                _LOGGER.warning(f"Remote {remote_name} not found. Please check your remotes.yml")
                 return None
-            # Fetch remote id.
+                
             remote_id = remote["id"]
-            # Check if given action exists in remote control list.
             if action in remote["controls"]:
-                computer.call_remote(remote_id, action, extras)
+                await computer.call_remote(remote_id, action, extras)
             else:
-                # Log if called remote doens't exists on remotes.yml.
-                _LOGGER.warning(
-                    f'Action "{action}" doesn\'t exists for remote {remote_name} Please check your remotes.yml'
-                )
+                _LOGGER.warning(f'Action "{action}" doesn\'t exists for remote {remote_name}')
 
-    # Register remote call service.
-    hass.services.register(DOMAIN, "call", handle_call)
-    # Set "keep_alive()" function to be called every 2 minutes (120 seconds).
-    # 2 minutes (120 seconds) are the max interval to keep connection alive.
-    # So you can just decrease this delay, otherwise, the connection will not
-    # be persistent.
-    track_time_interval(hass, keep_alive, timedelta(seconds=retry_delay))
+    # Register remote call service asynchronously.
+    hass.services.async_register(DOMAIN, "call", handle_call)
+    
+    # Set interval asynchronously
+    async_track_time_interval(hass, keep_alive, timedelta(seconds=retry_delay))
 
     return True
