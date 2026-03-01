@@ -8,8 +8,9 @@
 [![license](https://img.shields.io/github/license/DaviPtrs/hass-unified-remote)](License)
 
 <p align="center">
-  <img src="images/demo.png" />
+  <img width="1073" height="908" alt="image" src="https://github.com/user-attachments/assets/95b63be1-bb9e-4824-9378-7cb3fcf8818c" />
 </p>
+
 
 ## Documentation guide
 
