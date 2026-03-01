@@ -7,10 +7,10 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 
+# Removed the invalid PLAY_PAUSE flag from this list
 SUPPORTED_FEATURES = (
     MediaPlayerEntityFeature.PLAY
     | MediaPlayerEntityFeature.PAUSE
-    | MediaPlayerEntityFeature.PLAY_PAUSE
     | MediaPlayerEntityFeature.NEXT_TRACK
     | MediaPlayerEntityFeature.PREVIOUS_TRACK
     | MediaPlayerEntityFeature.VOLUME_STEP
