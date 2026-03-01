@@ -1,0 +1,6 @@
+{
+  "name": "Unified Remote Control",
+  "render_readme": true,
+  "file_name": "unified_remote",
+  "iot_class": "Local Push"
+}
