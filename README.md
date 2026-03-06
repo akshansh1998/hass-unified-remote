@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![license](https://img.shields.io/github/license/akshansh1998/hass-unified-remote)](LICENSE)
 
-A modernized Home Assistant integration that allows you to control your computer using [Unified Remote](https://www.unifiedremote.com/). 
+A modernized Home Assistant integration that allows you to control your computer using [Unified Remote](https://www.unifiedremote.com/). In Simple Words, you will be able to control your Microsoft Windows Computer using Home Assistant.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=akshansh1998&repository=hass-unified-remote&category=integration)
 
